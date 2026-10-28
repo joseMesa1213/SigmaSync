@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.89" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.14" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SigmaSync.Contracts\SigmaSync.Contracts.csproj" />
+    <ProjectReference Include="..\SigmaSync.Saint\SigmaSync.Saint.csproj" />
+  </ItemGroup>
+
+  <!-- Scripts de la base del hub: los aplica el comando "instalar-bd". -->
+  <ItemGroup>
+    <None Include="..\..\db\hub\**\*.sql" LinkBase="sql\hub" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="panel.html" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SigmaSync.Integration.Tests" />
+  </ItemGroup>
+</Project>

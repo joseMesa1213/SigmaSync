@@ -1,0 +1,11 @@
+bin/
+obj/
+publish/
+logs/
+TestResults/
+.vs/
+*.user
+
+# Credenciales locales de desarrollo (API key y secreto HMAC por nodo)
+appsettings.*.local.json
+appsettings.local.json

@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SigmaSync.Agent/SigmaSync.Agent.csproj" />
+    <Project Path="src/SigmaSync.Contracts/SigmaSync.Contracts.csproj" />
+    <Project Path="src/SigmaSync.Core/SigmaSync.Core.csproj" />
+    <Project Path="src/SigmaSync.Hub/SigmaSync.Hub.csproj" />
+    <Project Path="src/SigmaSync.Saint/SigmaSync.Saint.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SigmaSync.Contracts.Tests/SigmaSync.Contracts.Tests.csproj" />
+    <Project Path="tests/SigmaSync.Core.Tests/SigmaSync.Core.Tests.csproj" />
+    <Project Path="tests/SigmaSync.Integration.Tests/SigmaSync.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

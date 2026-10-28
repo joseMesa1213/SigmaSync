@@ -1,0 +1,10 @@
+# Configuración de cloudflared para publicar el SyncHub (copiar como config.yml en el servidor del hub).
+# Reemplace <TUNNEL_ID> y <DOMINIO> con los valores del túnel creado (ver LEEME.md).
+tunnel: <TUNNEL_ID>
+credentials-file: C:\SigmaSync\cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  # Solo se publica la API del hub. Kestrel escucha en localhost: el puerto no se abre en el firewall.
+  - hostname: sync.<DOMINIO>
+    service: http://localhost:5080
+  - service: http_status:404
