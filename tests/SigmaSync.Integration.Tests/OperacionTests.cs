@@ -42,6 +42,8 @@ public sealed class OperacionTests(Entorno e) : IAsyncLifetime
 
         Assert.Equal(2, await AlertasAsync("fuente = 'NODO' AND nodo_id = 'NODO_A'"));
         Assert.Equal(1, await AlertasAsync("nivel = 'ERROR' AND mensaje LIKE 'Prueba: Error procesando%'"));
+        // sync.Log está en hora local; en el hub debe quedar en UTC, como las alertas propias del hub.
+        Assert.Equal(2, await AlertasAsync("fuente = 'NODO' AND ABS(DATEDIFF(MINUTE, ts, SYSUTCDATETIME())) <= 1"));
     }
 
     [Fact]
@@ -49,7 +51,7 @@ public sealed class OperacionTests(Entorno e) : IAsyncLifetime
     {
         var repo = new RepositorioHub(e.CsHub);
         await using (var cn = new SqlConnection(e.CsHub))
-            await cn.ExecuteAsync("UPDATE hub.Nodo SET ultimo_latido = DATEADD(HOUR, -1, SYSUTCDATETIME()) WHERE nodo_id = 'NODO_B'");
+            await cn.ExecuteAsync("UPDATE hub.Nodo SET ultimo_latido = '2026-01-15 08:30' WHERE nodo_id = 'NODO_B'");
 
         Assert.Equal(["NODO_B"], await repo.DetectarNodosSinLatidoAsync(15));
         Assert.Empty(await repo.DetectarNodosSinLatidoAsync(15));   // una sola alerta por caída
@@ -57,7 +59,9 @@ public sealed class OperacionTests(Entorno e) : IAsyncLifetime
 
         await e.Latido(Entorno.NodoB).EjecutarAsync(default);
 
-        Assert.Equal(1, await AlertasAsync("nodo_id = 'NODO_B' AND nivel = 'INFO' AND mensaje LIKE '%volvió a reportar latido%'"));
+        // La recuperación informa el último latido real, no la hora en que se detectó la caída.
+        Assert.Equal(1, await AlertasAsync(
+            "nodo_id = 'NODO_B' AND nivel = 'INFO' AND mensaje LIKE '%volvió a reportar latido (el anterior fue el 2026-01-15 08:30 UTC)'"));
         Assert.Null(await e.ConsultarAsync<DateTime?>(e.CsHub, "SELECT sin_latido_desde FROM hub.Nodo WHERE nodo_id = 'NODO_B'"));
     }
 

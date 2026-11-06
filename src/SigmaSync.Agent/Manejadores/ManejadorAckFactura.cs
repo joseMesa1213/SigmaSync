@@ -24,9 +24,12 @@ public sealed class ManejadorAckFactura(ILogger<ManejadorAckFactura> log) : IMan
 
         foreach (var a in ack.Acciones)
         {
-            await RepositorioSync.InsertarDocRefAsync(ctx.Cn, ctx.Tx, "FACTURA_OC", ctx.NodoId, 'A', ack.FacturaNumero, pv, 'L', a.OcNumero,
-                ctx.Sobre.MsgId);
-            await RepositorioSync.RegistrarLogAsync(ctx.Cn, ctx.Tx, "INFO", "F3", ctx.Sobre.MsgId,
+            // La relación FACTURA_OC es con la OC nueva (idéntica a la factura). Las OC originales que F2 redujo o cerró
+            // (OC_ACTUALIZADA / OC_CERRADA) solo quedan en el log: su relación con el pedido ya está en OC_PEDIDO.
+            if (a.Tipo == TiposAccion.OcCreada)
+                await RepositorioSync.InsertarDocRefAsync(ctx.Cn, ctx.Tx, "FACTURA_OC", ctx.NodoId, 'A', ack.FacturaNumero, pv, 'L', a.OcNumero,
+                    ctx.Sobre.MsgId);
+            await RepositorioSync.RegistrarLogAsync(ctx.Cn, ctx.Tx, "INFO", a.Tipo == TiposAccion.OcCreada ? "F3" : "F2", ctx.Sobre.MsgId,
                 $"Factura {ack.FacturaNumero} → {a.Tipo} {a.OcNumero} en {pv}");
             log.LogInformation("Factura {Factura} → {Accion} {Oc} en {Pv}", ack.FacturaNumero, a.Tipo, a.OcNumero, pv);
         }

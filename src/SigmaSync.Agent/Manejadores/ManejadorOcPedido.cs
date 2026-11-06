@@ -31,7 +31,7 @@ public sealed class ManejadorOcPedido(ILogger<ManejadorOcPedido> log) : IManejad
         var cliente = await DestinoPedido.ClienteAsync(cn, tx, codClie)
             ?? throw new ErrorNegocioException(CodigosError.ClienteSinMapeo, $"El cliente {codClie} de {ctx.Sobre.NodoOrigen} no existe en SACLIE");
 
-        var productos = await DestinoPedido.ProductosAsync(cn, tx, oc.Items.Select(i => i.CodItem));
+        var productos = await DestinoPedido.ProductosAsync(cn, tx, oc.Items.Select(i => i.CodItem), cfg.CodUbic);
         var escalas = await DestinoPedido.EscalasAsync(cn, tx);
         var parametros = new ParametrosPedido(cfg.CodSucu, cfg.CodUbic, cfg.CodVend, cfg.CodOper, cfg.CodUsua, cfg.CodEsta,
             ctx.Sobre.NodoOrigen, DateTime.Now);

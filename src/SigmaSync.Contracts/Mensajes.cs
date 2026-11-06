@@ -23,7 +23,12 @@ public static class EstadosAck
 public static class TiposAccion
 {
     public const string OcCreada = "OC_CREADA";
+
+    /// <summary>F2: a la OC original del PV se le restó lo facturado y quedó con saldo pendiente.</summary>
     public const string OcActualizada = "OC_ACTUALIZADA";
+
+    /// <summary>F2: a la OC original del PV se le restó lo facturado y quedó en cero, así que se borró (como hace SAINT).</summary>
+    public const string OcCerrada = "OC_CERRADA";
 }
 
 public static class CodigosError
@@ -36,7 +41,10 @@ public static class CodigosError
     public const string ConfiguracionIncompleta = "CONFIGURACION_INCOMPLETA";
     public const string ProveedorSinMapeo = "PROVEEDOR_SIN_MAPEO";
 
-    /// <summary>La factura viene de un pedido sincronizado (F2); se retiene hasta que F2 esté habilitado.</summary>
+    /// <summary>
+    /// Ya no se emite: F2 está habilitado desde el 2026-11-06. Se conserva porque puede venir en mensajes rechazados
+    /// antes de esa fecha, que se reprocesan desde el panel.
+    /// </summary>
     public const string F2NoDisponible = "F2_NO_DISPONIBLE";
 
     // Alertas (no bloquean)
@@ -46,6 +54,10 @@ public static class CodigosError
     public const string ClienteSinMapeo = "CLIENTE_SIN_MAPEO";
     public const string DepositoNoExiste = "DEPOSITO_NO_EXISTE";
     public const string OcNoEncontrada = "OC_NO_ENCONTRADA";
+    /// <summary>F2: se facturó más de lo que quedaba pendiente en la OC original.</summary>
+    public const string CantidadExcedida = "CANTIDAD_EXCEDIDA";
+    /// <summary>F2: la factura trae un producto que no está en la OC original.</summary>
+    public const string ProductoNoPedido = "PRODUCTO_NO_PEDIDO";
     public const string ConsecutivoColision = "CONSECUTIVO_COLISION";
     public const string TipoNoSoportado = "TIPO_NO_SOPORTADO";
     public const string VersionNoSoportada = "VERSION_NO_SOPORTADA";

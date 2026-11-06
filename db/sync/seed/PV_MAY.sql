@@ -4,7 +4,7 @@ DECLARE @cfg TABLE (clave varchar(50) PRIMARY KEY, valor varchar(200) NOT NULL);
 INSERT @cfg VALUES
     ('NodoId', 'PV_MAY'), ('Rol', 'PV'), ('CodSucu', '00000'),
     ('CodUsua', 'SYNC'), ('CodEsta', 'SYNC'), ('CodUbic', '115'),
-    ('ActualizarPedidoPV', '0'), ('VentanaDias', '3'), ('EsperaSegundos', '60'),
+    ('ActualizarPedidoPV', '1'), ('VentanaDias', '3'), ('EsperaSegundos', '60'),
     ('CapturaDesde', CONVERT(varchar(10), GETDATE(), 23));
 
 MERGE sync.Config AS t USING @cfg AS s ON t.clave = s.clave

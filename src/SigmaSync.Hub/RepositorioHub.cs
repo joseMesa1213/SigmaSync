@@ -56,20 +56,22 @@ public sealed class RepositorioHub(string connectionString)
     {
         await using var cn = await AbrirAsync();
         await using var tx = cn.BeginTransaction();
-        var caidoDesde = await cn.ExecuteScalarAsync<DateTime?>("""
-            DECLARE @desde datetime2(0);
-            UPDATE hub.Nodo SET @desde = sin_latido_desde, sin_latido_desde = NULL, ultimo_latido = SYSUTCDATETIME(),
+        var caida = await cn.QuerySingleOrDefaultAsync<(DateTime? Desde, DateTime? UltimoLatido)>("""
+            DECLARE @desde datetime2(0), @ultimo datetime2(0);
+            UPDATE hub.Nodo SET @desde = sin_latido_desde, @ultimo = ultimo_latido, sin_latido_desde = NULL, ultimo_latido = SYSUTCDATETIME(),
                    version_agente = LEFT(@VersionAgente, 20), estado_latido = @estado
             WHERE nodo_id = @nodoId;
-            SELECT @desde;
+            SELECT @desde AS Desde, @ultimo AS UltimoLatido;
             """, new
         {
             nodoId, latido.VersionAgente,
             estado = System.Text.Json.JsonSerializer.Serialize(latido with { Alertas = null }, SigmaJson.Opciones),
         }, tx);
 
-        if (caidoDesde is not null)
-            await InsertarAlertaAsync(cn, tx, nodoId, "INFO", $"El agente de {nodoId} volvió a reportar latido (sin latido desde {caidoDesde:yyyy-MM-dd HH:mm} UTC)", null);
+        if (caida.Desde is not null)
+            await InsertarAlertaAsync(cn, tx, nodoId, "INFO", caida.UltimoLatido is { } ultimo
+                ? $"El agente de {nodoId} volvió a reportar latido (el anterior fue el {ultimo:yyyy-MM-dd HH:mm} UTC)"
+                : $"El agente de {nodoId} reportó su primer latido", null);
 
         if (latido.Alertas is { Count: > 0 } alertas)
             await cn.ExecuteAsync("""

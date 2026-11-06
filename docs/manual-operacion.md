@@ -29,9 +29,11 @@ Carpetas:
 |---|---|---|---|
 | **F1** | Un PV graba una OC con proveedor SIGMAPLAS (`890919355-4`) o CENTRO DE DISTRICION (`8909193545`) | Pedido en Fábrica o CEDI a precio de lista 3, con `OrdenC` = número de la OC | En Facturación → Cargar → buscar por **Orden de compra** |
 | **F3** | Fábrica o CEDI factura a un PV, sin pedido sincronizado | OC en el PV idéntica a la factura, con `OrdenC` = número de factura | En Compras → Cargar → Orden de compra → buscar por el número de factura |
-| **F2** | Fábrica o CEDI factura desde un pedido sincronizado | *Pendiente de habilitar.* Hoy la factura queda retenida en el hub con `F2_NO_DISPONIBLE` | Panel → Mensajes → RECHAZADO |
+| **F2** | Fábrica o CEDI factura desde un pedido sincronizado (completo o en partes) | Como F3, una **OC nueva idéntica a la factura**. Además, a la **OC original** del PV se le resta lo facturado: queda con lo que falta por llegar y, cuando ya no falta nada, se borra | La OC nueva: igual que F3, por el número de factura. La OC original sigue con su número y muestra el saldo |
 
-Los documentos que crea SigmaSync llevan usuario y estación `SYNC` y, en `Notas1`, una marca como `SYNC PV_MAY OC 000003538` o `SYNC FAB FAC *33570`.
+Los documentos que crea SigmaSync llevan usuario y estación `SYNC` y, en `Notas1`, una marca como `SYNC PV_MAY OC 000003538` o `SYNC FAB FAC *33570`. En F2, la marca de la OC nueva dice también de qué OC original viene: `SYNC FAB FAC *33647 OC 000003538`.
+
+> **En el PV, cargar siempre la OC nueva** (la que se busca por el número de factura), **no la original**. La original solo indica lo que falta por llegar. Si se carga la original, la mercancía se registra con el costo de la OC y no con el de la factura, y la OC nueva queda sobrando.
 
 La latencia normal es de menos de 2 minutos entre que se graba un documento y aparece en el otro nodo.
 
@@ -57,7 +59,7 @@ Se abre en `https://sync.<dominio>/panel`, o en `http://localhost:5080/panel` de
 | `PENDIENTE` | Esperando que el nodo destino lo recoja | Ninguna. Si lleva mucho tiempo, revisar el latido del destino |
 | `EN_PROCESO` | El destino lo tomó y lo está procesando (reserva de 5 min) | Ninguna |
 | `CONFIRMADO` | Aplicado en el destino | Ninguna (se purga a los 30 días) |
-| `RECHAZADO` | El destino no lo aplicó por un problema de negocio: producto inexistente, F2 pendiente… | Corregir la causa (sección 5) y **Reprocesar**, o **Descartar** si ya no aplica |
+| `RECHAZADO` | El destino no lo aplicó por un problema de negocio: producto inexistente, tercero sin mapeo… | Corregir la causa (sección 5) y **Reprocesar**, o **Descartar** si ya no aplica |
 | `DLQ` | Falló 6 veces por un error técnico. **Detiene los mensajes siguientes del mismo documento** | Revisar el error, corregir y **Reprocesar**; o **Descartar** |
 | `DESCARTADO` | Un operador lo sacó de la cola | Ninguna (se puede reprocesar si fue un error) |
 
@@ -78,7 +80,10 @@ Si `Host` está vacío no se envía correo, pero las alertas quedan en el panel.
 | `PRODUCTO_INACTIVO`, `PRODUCTO_SIN_PRECIO` | Nodo | El producto está inactivo o sin precio de lista 3 | Corregir el maestro y **Reprocesar** |
 | `CLIENTE_SIN_MAPEO`, `PROVEEDOR_SIN_MAPEO` | Nodo | Falta la correspondencia del tercero en `sync.NodoTercero` | Ver sección 6.5 y **Reprocesar** |
 | `DEPOSITO_NO_EXISTE`, `CONFIGURACION_INCOMPLETA` | Nodo | Falta o es inválido `CodUbic` en `sync.Config` | Corregir `sync.Config` y **Reprocesar** |
-| `F2_NO_DISPONIBLE` | Nodo (PV) | Factura hecha desde un pedido sincronizado; F2 aún no está habilitado | Dejarla `RECHAZADO`; se reprocesa cuando F2 se habilite. Mientras tanto, el PV registra esa compra a mano |
+| `F2_NO_DISPONIBLE` | Nodo (PV) | Solo en mensajes anteriores al 2026-11-06, cuando F2 aún no estaba habilitado | **Reprocesar**: ahora se aplica como F2. Si el PV ya registró esa compra a mano, **Descartar** |
+| `CANTIDAD_EXCEDIDA` | Nodo (PV) | F2: se facturó más de lo que faltaba en la OC original | La OC nueva lleva lo facturado. Confirmar con Fábrica o CEDI que el exceso es correcto |
+| `PRODUCTO_NO_PEDIDO` | Nodo (PV) | F2: la factura trae un producto que no estaba en la OC original | Va solo en la OC nueva. Confirmar que el PV lo quiere |
+| `OC_NO_ENCONTRADA` | Nodo (PV) | F2: la OC original ya no existe (se cargó en una compra o se borró antes de llegar la factura) | Se creó igual la OC nueva. **Revisar que la mercancía no se reciba dos veces**; si ya se recibió con la original, borrar la nueva |
 | `EXENTO_DIFERENTE` | Nodo (PV) | El producto viene exento en la factura y el maestro del PV dice otra cosa | La OC sigue a la factura. Corregir el maestro del PV |
 | `DIFERENCIA_TOTAL` | Nodo (PV) | La OC no suma lo mismo que la factura neta (más de $1) | Revisar la factura en Fábrica o CEDI antes de cargar la OC |
 | `FLETES_NO_INCLUIDOS` | Nodo (PV) | La factura trae fletes, que la OC no incluye | Registrar los fletes al cargar la compra |
@@ -144,6 +149,58 @@ Si el documento ya se había enviado, no se duplica. Para enviarlo de nuevo, usa
 
 ### 6.8 Actualizar la versión
 Ejecutar de nuevo `instalar-hub.ps1` o `instalar-agente.ps1` con la versión nueva publicada. La configuración existente se conserva, y el instalador valida y vuelve a arrancar los servicios.
+
+### 6.9 Seguimiento del piloto (una vez por semana, el primer mes)
+
+SigmaSync funciona bien solo si se cumplen dos hábitos: **Fábrica y el CEDI facturan cargando el pedido** que creó F1, y **el PV carga en Compras la OC** que creó SigmaSync (la que se busca por el número de factura). Si no se cumplen, nada falla, pero se acumulan documentos abiertos y el comprometido se infla. Estas consultas lo detectan. Son solo de lectura y se corren en SSMS sobre la base SAINT de cada nodo. `@dias` es la tolerancia: 7 días es un buen punto de partida.
+
+**1. En Fábrica y en el CEDI: ¿se están cargando los pedidos al facturar?**
+
+```sql
+DECLARE @dias int = 7;
+-- Pedidos creados por F1 que siguen abiertos después de @dias
+SELECT d.nodo_origen AS pv, d.num_origen AS oc_pv, d.num_destino AS pedido, d.creado_ts AS creado,
+       DATEDIFF(DAY, d.creado_ts, GETDATE()) AS dias, f.MtoTotal
+FROM sync.DocRef d
+JOIN dbo.SAFACT f ON f.TipoFac = 'E' AND f.NumeroD = d.num_destino
+WHERE d.relacion = 'OC_PEDIDO' AND d.activo = 1 AND d.creado_ts < DATEADD(DAY, -@dias, GETDATE())
+ORDER BY d.creado_ts;
+-- Facturas a los PV de los últimos 30 días hechas SIN cargar un pedido
+SELECT t.nodo_id AS pv, COUNT(*) AS facturas_sin_pedido, MAX(f.FechaE) AS ultima
+FROM dbo.SAFACT f
+JOIN sync.NodoTercero t ON t.tipo_tercero = 'CLIENTE' AND t.cod_tercero = f.CodClie AND t.activo = 1
+WHERE f.TipoFac = 'A' AND f.FechaE >= DATEADD(DAY, -30, GETDATE())
+  AND NOT EXISTS (SELECT 1 FROM dbo.SAITEMFAC i WHERE i.TipoFac = 'A' AND i.NumeroD = f.NumeroD AND i.OTipo = 'E')
+GROUP BY t.nodo_id;
+```
+
+Si las dos consultas devuelven filas, Fábrica o el CEDI están facturando directo y dejan los pedidos de F1 abiertos. Hay que pedirles que facturen con **Cargar → Pedido** y borrar los pedidos que ya se facturaron por fuera.
+
+**2. En el PV: ¿se están cargando las OC de SigmaSync?**
+
+```sql
+DECLARE @dias int = 7;
+SELECT c.NumeroD AS oc, c.OrdenC AS factura, c.CodProv, c.FechaE, DATEDIFF(DAY, c.FechaE, GETDATE()) AS dias, c.Monto, c.Notas1
+FROM dbo.SACOMP c
+WHERE c.TipoCom = 'L' AND c.CodUsua = 'SYNC' AND c.FechaE < DATEADD(DAY, -@dias, GETDATE())
+ORDER BY c.FechaE;
+```
+
+Cada fila es una factura cuya mercancía el PV no ha registrado con la OC. Si la registró digitando la compra a mano, la OC sobra: hay que borrarla y recordarle al PV que use **Cargar → Orden de compra**.
+
+**3. En el PV: OC originales que siguen con saldo**
+
+```sql
+DECLARE @dias int = 7;
+SELECT d.num_origen AS oc_original, d.nodo_destino AS nodo, d.num_destino AS pedido, d.creado_ts AS enviada,
+       DATEDIFF(DAY, d.creado_ts, GETDATE()) AS dias, c.Monto AS saldo
+FROM sync.DocRef d
+JOIN dbo.SACOMP c ON c.TipoCom = 'L' AND c.NumeroD = d.num_origen
+WHERE d.relacion = 'OC_PEDIDO' AND d.activo = 1 AND d.creado_ts < DATEADD(DAY, -@dias, GETDATE())
+ORDER BY d.creado_ts;
+```
+
+Es normal que haya OC con saldo mientras Fábrica o el CEDI terminan de despachar. Hay que cruzar cada fila con la consulta 1 en el nodo indicado. **Si el pedido ya no aparece abierto allá**, el saldo no va a llegar: el pedido se canceló o se facturó por fuera. En ese caso, con el PV, se borra la OC original o el saldo que quedó.
 
 ## 7. Respaldos y mantenimiento
 

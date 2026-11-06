@@ -9,3 +9,9 @@ TestResults/
 # Credenciales locales de desarrollo (API key y secreto HMAC por nodo)
 appsettings.*.local.json
 appsettings.local.json
+
+# Salidas de los scripts corridos en los servidores del cliente: traen datos del cliente,
+# claves de integraciones anteriores y la URL/llave de Supabase. Se quedan solo en local.
+docs/resultado*.md
+docs/resultados_pv/resultado*.md
+docs/resultados_fabrica/resultado*.md

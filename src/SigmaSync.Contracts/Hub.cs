@@ -24,7 +24,7 @@ public sealed record LatidoSolicitud(
     DateTimeOffset Ts,
     IReadOnlyList<AlertaNodo>? Alertas = null);
 
-/// <summary>Advertencia o error de sync.Log del nodo, que viaja con el latido para centralizarse en el hub.</summary>
+/// <summary>Advertencia o error de sync.Log del nodo, que viaja con el latido para centralizarse en el hub. Ts en UTC.</summary>
 public sealed record AlertaNodo(long LogId, DateTime Ts, string Nivel, string Componente, Guid? MsgId, string Mensaje);
 
 public sealed record AlertaHub(

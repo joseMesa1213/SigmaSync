@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using SigmaSync.Core.F2;
 using SigmaSync.Core.F3;
 
 namespace SigmaSync.Saint.F3;
@@ -60,8 +61,10 @@ public static class DestinoOc
 
     /// <summary>
     /// Inserta la OC: un INSERT de encabezado (el trigger de SACOMP no actúa con TipoCom L) y luego los ítems.
-    /// Con <paramref name="actualizarPedido"/> suma también SAPROD.Pedido y SAEXIS.CantPed (pendiente de confirmar
-    /// en pantalla qué hace SAINT; por eso va detrás de la bandera ActualizarPedidoPV).
+    /// Con <paramref name="actualizarPedido"/> suma también SAPROD.Pedido y SAEXIS.CantPed del depósito, como SAINT al
+    /// grabar una OC en pantalla (prueba P2, 2026-11-05). Sin fila en SAEXIS (el producto no está asignado al depósito,
+    /// frecuente en el PV) solo sube SAPROD.Pedido y no crea la fila: así quedó la OC 3567 grabada por SAINT, y así hace
+    /// SAINT con los pedidos en Fábrica (prueba del 035852). La fila la crea la compra, que sí mueve existencia.
     /// </summary>
     public static async Task InsertarAsync(SqlConnection cn, SqlTransaction tx, string numeroD, OcArmada oc, bool actualizarPedido)
     {
@@ -95,6 +98,57 @@ public static class DestinoOc
                 UPDATE dbo.SAPROD SET Pedido = Pedido + @Cantidad WHERE CodProd = @CodItem;
                 UPDATE dbo.SAEXIS SET CantPed = CantPed + @Cantidad WHERE CodProd = @CodItem AND CodUbic = @CodUbic;
                 """, items, tx);
+    }
+
+    /// <summary>F2: líneas de la OC original del PV, o null si la OC ya no existe (el PV la cargó en una compra o la borró).</summary>
+    public static async Task<IReadOnlyList<LineaOc>?> LineasOcAsync(SqlConnection cn, SqlTransaction tx, string codSucu, string numeroD)
+    {
+        if (!await OcExisteAsync(cn, tx, codSucu, numeroD)) return null;
+        return (await cn.QueryAsync<LineaOc>("""
+            SELECT CAST(NroLinea AS int) AS NroLinea, CodItem, ISNULL(CodUbic, '') AS CodUbic, Cantidad, ISNULL(Costo, 0) AS Costo,
+                   CAST(CASE WHEN EsExento = 1 THEN 1 ELSE 0 END AS bit) AS EsExento
+            FROM dbo.SAITEMCOM WHERE TipoCom = 'L' AND NumeroD = @numeroD AND CodSucu = @codSucu
+            ORDER BY NroLinea
+            """, new { codSucu, numeroD }, tx)).ToList();
+    }
+
+    /// <summary>
+    /// F2: aplica a la OC original lo que calculó <see cref="Core.F2.SaldoOc"/>. Borra las líneas cumplidas, deja el saldo
+    /// en las parciales y recalcula el encabezado; si no queda nada, borra la OC (como SAINT). Con
+    /// <paramref name="actualizarPedido"/> baja SAPROD.Pedido y SAEXIS.CantPed (si la fila existe) lo que se restó.
+    /// </summary>
+    public static async Task AplicarSaldoAsync(SqlConnection cn, SqlTransaction tx, string codSucu, string numeroD, SaldoCalculado saldo,
+        bool actualizarPedido)
+    {
+        var cambios = saldo.Cambios.Select(c => new
+        {
+            codSucu, numeroD, c.NroLinea, c.CodItem, c.CodUbic, c.CantidadNueva, c.TotalItemNuevo, c.Reducido, Borrar = c.Borrar ? 1 : 0,
+        }).ToList();
+
+        await cn.ExecuteAsync("""
+            IF @Borrar = 1
+                DELETE FROM dbo.SAITEMCOM WHERE TipoCom = 'L' AND NumeroD = @numeroD AND CodSucu = @codSucu AND NroLinea = @NroLinea;
+            ELSE
+                UPDATE dbo.SAITEMCOM SET Cantidad = @CantidadNueva, TotalItem = @TotalItemNuevo
+                WHERE TipoCom = 'L' AND NumeroD = @numeroD AND CodSucu = @codSucu AND NroLinea = @NroLinea;
+            """, cambios, tx);
+
+        if (saldo.Cerrada)
+            await cn.ExecuteAsync("""
+                DELETE FROM dbo.SAITEMCOM WHERE TipoCom = 'L' AND NumeroD = @numeroD AND CodSucu = @codSucu;
+                DELETE FROM dbo.SACOMP WHERE TipoCom = 'L' AND NumeroD = @numeroD AND CodSucu = @codSucu;
+                """, new { codSucu, numeroD }, tx);
+        else
+            await cn.ExecuteAsync("""
+                UPDATE dbo.SACOMP SET TGravable = @TGravable, TExento = @TExento, Monto = @Monto, TotalPrd = @Monto, MtoTotal = @Monto, Credito = @Monto
+                WHERE TipoCom = 'L' AND NumeroD = @numeroD AND CodSucu = @codSucu;
+                """, new { codSucu, numeroD, saldo.TGravable, saldo.TExento, saldo.Monto }, tx);
+
+        if (actualizarPedido)
+            await cn.ExecuteAsync("""
+                UPDATE dbo.SAPROD SET Pedido = Pedido - @Reducido WHERE CodProd = @CodItem;
+                UPDATE dbo.SAEXIS SET CantPed = CantPed - @Reducido WHERE CodProd = @CodItem AND CodUbic = @CodUbic;
+                """, cambios, tx);
     }
 
     private static IEnumerable<(string, string)> Cols(string tabla, params string[] columnas) => columnas.Select(c => (tabla, c));

@@ -24,7 +24,7 @@ public sealed record ConfigNodo(
     int VentanaDias,
     int EsperaSegundos,
     DateTime CapturaDesde,
-    bool ActualizarPedidoPV = false)
+    bool ActualizarPedidoPV = true)
 {
     public static ConfigNodo Desde(IReadOnlyDictionary<string, string> c)
     {
@@ -44,6 +44,7 @@ public sealed record ConfigNodo(
             EsperaSegundos: int.TryParse(Opcional("EsperaSegundos"), out var e) ? e : 60,
             CapturaDesde: DateTime.TryParse(Opcional("CapturaDesde"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
                 ? d : DateTime.Today,
-            ActualizarPedidoPV: Opcional("ActualizarPedidoPV") == "1");
+            // Encendida salvo '0': la prueba P2 (2026-11-05) confirmó que SAINT sube Pedido y CantPed al grabar la OC.
+            ActualizarPedidoPV: Opcional("ActualizarPedidoPV") != "0");
     }
 }

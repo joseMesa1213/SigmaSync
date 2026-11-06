@@ -57,6 +57,38 @@ public class ArmadorPedidoTests
         Assert.Equal(new DateTime(2025, 11, 4), e.FechaV);                 // FechaE + 5 días de crédito, sin hora
     }
 
+    /// <summary>
+    /// Reproduce el pedido 035850 grabado en pantalla en la copia de Fábrica (2026-11-04, SAINT 9.0.2.6):
+    /// Costo = CostPro, Refere = SAPROD.Refere (el código si está vacío), ExistAnt = existencia del depósito, SaldoAct = saldo del cliente.
+    /// </summary>
+    [Fact]
+    public void Reproduce_el_pedido_035850_de_SAINT()
+    {
+        var r = ArmadorPedido.Armar(
+            Oc(("162240340070", 7), ("161240340090", 13), ("3458", 3)),
+            Cliente with { Saldo = 13355954910.64m },
+            Dic(Prod("162240340070", 3857.15126m, 1572.9539m) with { Refere = "618NE", ExistenDepo = 1920 },
+                Prod("161240340090", 4731.10084m, 1929.3418m) with { Refere = "16103", ExistenDepo = 790 },
+                Prod("3458", 7352.94958m, 3200m) with { Refere = "", ExistenDepo = 330 }),
+            Fab, EscalasPedido.Fabrica);
+
+        Assert.True(r.Ok);
+        var (e, items) = (r.Pedido!.Encabezado, r.Pedido.Items);
+
+        Assert.Equal(["618NE", "16103", "3458"], items.Select(i => i.Refere));
+        Assert.Equal([1572.9539m, 1929.3418m, 3200m], items.Select(i => i.Costo));
+        Assert.Equal([1920m, 790m, 330m], items.Select(i => i.ExistAnt));
+        Assert.Equal([27000.05m, 61504.30m, 22058.85m], items.Select(i => i.TotalItem));
+        Assert.Equal([5130.011m, 11685.819m, 4191.181m], items.Select(i => i.MtoTax));
+        Assert.Equal([5130.0112m, 11685.8191m, 4191.1813m], items.Select(i => i.MtoTaxO));
+        Assert.Equal([3857.151m, 4731.101m, 7352.950m], items.Select(i => i.PriceO));
+
+        Assert.Equal(110563.20m, e.Monto);
+        Assert.Equal(21007.01m, e.MtoTax);
+        Assert.Equal(131570.21m, e.MtoTotal);
+        Assert.Equal(13355954910.64m, e.SaldoAct);
+    }
+
     [Fact]
     public void Usa_el_precio_de_lista_3_del_destino_y_no_el_costo_de_la_OC()
     {

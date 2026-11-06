@@ -1,4 +1,6 @@
 using SigmaSync.Contracts;
+using SigmaSync.Core.F1;
+using SigmaSync.Core.F2;
 using SigmaSync.Core.F3;
 using SigmaSync.Saint;
 using SigmaSync.Saint.F3;
@@ -6,9 +8,11 @@ using SigmaSync.Saint.F3;
 namespace SigmaSync.Agent.Manejadores;
 
 /// <summary>
-/// En el PV: factura de Fábrica o CEDI. Sin pedido sincronizado (F3) crea una OC idéntica a la factura, que el
-/// trabajador carga en Compras. Si algún ítem viene de un pedido sincronizado (F2), la factura se rechaza con
-/// F2_NO_DISPONIBLE y queda en el hub para reprocesarla cuando F2 esté habilitado.
+/// En el PV: factura de Fábrica o CEDI. Siempre crea una OC nueva idéntica a la factura, que el trabajador carga en
+/// Compras buscándola por el número de factura (F3).
+/// Si algún ítem viene de un pedido sincronizado (F2, decisión D5), además le resta lo facturado a la OC original del PV,
+/// como hace SAINT al recibir una OC en partes: la línea cumplida se borra, la parcial queda con el saldo y, si no queda
+/// nada, la OC se borra. La OC original conserva su número y sigue mostrando lo que falta por facturar.
 /// </summary>
 public sealed class ManejadorFacturaOc(ILogger<ManejadorFacturaOc> log) : IManejadorMensaje
 {
@@ -23,16 +27,15 @@ public sealed class ManejadorFacturaOc(ILogger<ManejadorFacturaOc> log) : IManej
         var numeroFactura = factura.Factura.Numero;
         var cfg = ConfigNodo.Desde(await RepositorioSync.LeerConfigAsync(cn, tx));
 
-        // F2: ítems facturados desde un pedido que creó el agente (oc_origen, o pedido_origen + DocRef del PV).
-        var deF2 = new List<string>();
+        // F2: OC original de cada ítem facturado desde un pedido que creó el agente (oc_origen, o pedido_origen + DocRef del PV).
+        var porOc = new Dictionary<string, List<(string CodItem, decimal Cantidad)>>(StringComparer.OrdinalIgnoreCase);
         foreach (var i in factura.Items.Where(i => i.OcOrigen is not null || i.PedidoOrigen is not null))
         {
             var oc = i.OcOrigen ?? await RepositorioSync.OcDePedidoAsync(cn, tx, origen, i.PedidoOrigen!);
-            if (oc is not null) deF2.Add($"{i.CodItem} (pedido {i.PedidoOrigen}, OC {oc})");
+            if (oc is null) continue;   // pedido hecho a mano en Fábrica o CEDI: el ítem solo va en la OC nueva (F3)
+            if (!porOc.TryGetValue(oc, out var lista)) porOc[oc] = lista = [];
+            lista.Add((i.CodItem, i.Cantidad));
         }
-        if (deF2.Count > 0)
-            throw new ErrorNegocioException(CodigosError.F2NoDisponible,
-                $"La factura {numeroFactura} viene de pedidos sincronizados: {string.Join(", ", deF2)}. Se retiene hasta habilitar F2");
 
         if (cfg.CodUbic is null)
             throw new ErrorNegocioException(CodigosError.ConfiguracionIncompleta, $"sync.Config de {cfg.NodoId} no tiene CodUbic (depósito del PV)");
@@ -51,20 +54,54 @@ public sealed class ManejadorFacturaOc(ILogger<ManejadorFacturaOc> log) : IManej
         if (!armado.Ok) throw new ErrorNegocioException(armado.Errores);
         foreach (var a in armado.Alertas) ctx.Alertar(a.Codigo, a.Mensaje, a.CodItem);
 
+        var ocNueva = armado.Oc!;
+        if (porOc.Count > 0)   // la marca dice de qué OC original viene: "SYNC FAB FAC *33647 OC 000003538"
+            ocNueva = ocNueva with
+            {
+                Encabezado = ocNueva.Encabezado with
+                {
+                    Notas1 = ArmadorPedido.Marca(origen, "FAC", $"{numeroFactura} OC {string.Join(",", porOc.Keys)}"),
+                },
+            };
+
         var consecutivo = await Consecutivos.TomarAsync(cn, tx, cfg.CodSucu, Consecutivos.PrxOrdenC,
             n => DestinoOc.OcExisteAsync(cn, tx, cfg.CodSucu, n));
         if (consecutivo.Saltados.Count > 0)
             ctx.Alertar(CodigosError.ConsecutivoColision,
                 $"PrxOrdenC apuntaba a OC que ya existen ({string.Join(", ", consecutivo.Saltados)}); se usó {consecutivo.Numero}");
 
-        await DestinoOc.InsertarAsync(cn, tx, consecutivo.Numero, armado.Oc!, cfg.ActualizarPedidoPV);
+        await DestinoOc.InsertarAsync(cn, tx, consecutivo.Numero, ocNueva, cfg.ActualizarPedidoPV);
         await RepositorioSync.InsertarDocRefAsync(cn, tx, "FACTURA_OC", origen, 'A', numeroFactura, ctx.NodoId, 'L', consecutivo.Numero,
             ctx.Sobre.MsgId);
-        await ctx.ResponderAsync(TiposMensaje.AckFactura, new AckFactura(numeroFactura, EstadosAck.Aplicada,
-            [new AccionAck(TiposAccion.OcCreada, consecutivo.Numero)], ctx.Alertas.ToList(), []));
+        var acciones = new List<AccionAck> { new(TiposAccion.OcCreada, consecutivo.Numero) };
 
-        log.LogInformation("Factura {Factura} de {Origen} → OC {Oc} ({Items} ítems, {Total:N2})",
-            numeroFactura, origen, consecutivo.Numero, factura.Items.Count, armado.Oc!.Encabezado.Monto);
+        // F2 (D5): restar lo facturado a cada OC original.
+        foreach (var (ocOriginal, facturado) in porOc)
+        {
+            var lineas = await DestinoOc.LineasOcAsync(cn, tx, cfg.CodSucu, ocOriginal);
+            if (lineas is null)
+            {
+                ctx.Alertar(CodigosError.OcNoEncontrada,
+                    $"La OC {ocOriginal} ya no existe en el PV (¿se cargó en una compra antes de llegar la factura {numeroFactura}?). " +
+                    $"Se creó la OC {consecutivo.Numero}: revisar que la mercancía no se reciba dos veces");
+                continue;
+            }
+
+            var saldo = SaldoOc.Restar(ocOriginal, lineas, facturado, escalas.TotalItem);
+            foreach (var a in saldo.Alertas) ctx.Alertar(a.Codigo, a.Mensaje, a.CodItem);
+            if (saldo.Cambios.Count == 0) continue;
+
+            await DestinoOc.AplicarSaldoAsync(cn, tx, cfg.CodSucu, ocOriginal, saldo, cfg.ActualizarPedidoPV);
+            acciones.Add(new AccionAck(saldo.Cerrada ? TiposAccion.OcCerrada : TiposAccion.OcActualizada, ocOriginal));
+            log.LogInformation("Factura {Factura}: OC original {Oc} {Estado}", numeroFactura, ocOriginal,
+                saldo.Cerrada ? "cerrada" : $"con saldo de {saldo.LineasQueQuedan} líneas ({saldo.Monto:N2})");
+        }
+
+        await ctx.ResponderAsync(TiposMensaje.AckFactura, new AckFactura(numeroFactura, EstadosAck.Aplicada, acciones, ctx.Alertas.ToList(), []));
+
+        log.LogInformation("Factura {Factura} de {Origen} → OC {Oc} ({Items} ítems, {Total:N2}){F2}",
+            numeroFactura, origen, consecutivo.Numero, factura.Items.Count, ocNueva.Encabezado.Monto,
+            porOc.Count > 0 ? $"; F2 sobre {string.Join(", ", porOc.Keys)}" : "");
     }
 
     public Sobre? RespuestaRechazo(Sobre sobre, string nodoId, IReadOnlyList<ErrorDoc> errores)

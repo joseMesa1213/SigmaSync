@@ -59,11 +59,13 @@ public sealed class F1Tests(CopiasSaint s)
         var patron = await CopiasSaint.ColumnasConValorAsync(cn, tx, "SAFACT", "TipoFac = 'E' AND NumeroD = '035829'", new { });
         var generado = await CopiasSaint.ColumnasConValorAsync(cn, tx, "SAFACT", "TipoFac = 'E' AND NumeroD = @numero", new { numero });
         generado.Remove("Notas1");
+        generado.Remove("SaldoAct");   // el 035829 (2025) lo dejó en 0; el 035850 grabado en pantalla el 2026-11-04 sí lo llena
         Assert.Equal(patron, generado);
 
         var patronItem = await CopiasSaint.ColumnasConValorAsync(cn, tx, "SAITEMFAC", "TipoFac = 'E' AND NumeroD = '035829' AND NroLinea = 1", new { });
         var generadoItem = await CopiasSaint.ColumnasConValorAsync(cn, tx, "SAITEMFAC", "TipoFac = 'E' AND NumeroD = @numero AND NroLinea = 3", new { numero });
         foreach (var c in new[] { "Descrip2", "Descrip3" }) { patronItem.Remove(c); generadoItem.Remove(c); }   // dependen del maestro del producto
+        generadoItem.Remove("ExistAnt");   // igual que SaldoAct: el 035829 no lo llenó, el 035850 sí
         Assert.Equal(patronItem, generadoItem);
 
         var e = await cn.QuerySingleAsync("""

@@ -36,13 +36,13 @@ dotnet build SigmaSync.slnx
 dotnet test SigmaSync.slnx
 ```
 
-**Esperado:** 63 pruebas en verde, en tres proyectos:
+**Esperado:** 72 pruebas en verde, en tres proyectos:
 
 | Proyecto | Pruebas | Qué cubre |
 |---|---|---|
 | `SigmaSync.Contracts.Tests` | 12 | JSON del contrato (snake_case, compatibilidad v1/v1.1) y firma HMAC |
-| `SigmaSync.Core.Tests` | 17 | Cálculos al centavo: pedido `035829`, OC desde `*33570` y `009950`, exentos, descuentos |
-| `SigmaSync.Integration.Tests` | 34 | Hub (orden, DLQ, seguridad), agente (idempotencia, rechazos), F1 y F3 contra las copias SAINT, operación (alertas, correo, panel) |
+| `SigmaSync.Core.Tests` | 23 | Cálculos al centavo: pedido `035829`, OC desde `*33570` y `009950`, exentos, descuentos, saldo de la OC en F2 (D5) |
+| `SigmaSync.Integration.Tests` | 37 | Hub (orden, DLQ, seguridad), agente (idempotencia, rechazos), F1, F2 y F3 contra las copias SAINT, operación (alertas, correo, panel) |
 
 Las pruebas contra las copias SAINT corren dentro de transacciones que se deshacen: no dejan rastro.
 
@@ -315,6 +315,41 @@ SELECT COUNT(*) FROM ADM_MAY.sync.Outbox WHERE tipo = 'OC_PEDIDO';   -- 2 (solo 
 
 ---
 
+## 10b. F2: dos facturas parciales del pedido `035850` (OC `000003538`)
+
+En LocalDB no hay pantalla de SAINT. [db/pruebas/factura-desde-pedido.sql](../db/pruebas/factura-desde-pedido.sql) hace lo mismo que SAINT hizo con las facturas `*33647` y `*33648` en la copia del cliente:
+- crea la factura con líneas `OTipo='E'`/`ONumero` = pedido;
+- deja el pedido con el saldo;
+- baja `Compro` y `CantCom`.
+
+Requiere el paso 5, porque el pedido `035850` debe existir.
+
+```powershell
+$f = "db\pruebas\factura-desde-pedido.sql"
+# Factura 1: SM completa, PP 45 de 90, P4 completa (igual que la compra parcial PRUEBA-2 del PV)
+sqlcmd -S "(localdb)\MSSQLLocalDB" -b -I -v FAC="*99001" PED="035850" LINEAS="1I21085125150SM~250+1I24110120130PP~45+1I21033062400P4~180" -i $f
+& $ag enviar-factura --nodo FAB --numero "*99001"
+# Esperar el ACK en la terminal 3 (FAB): "Factura *99001 → OC_ACTUALIZADA 000003538 en PV_MAY". Luego el resto:
+sqlcmd -S "(localdb)\MSSQLLocalDB" -b -I -v FAC="*99002" PED="035850" LINEAS="1I24110120130PP~45+1I21100140140T1~200" -i $f
+& $ag enviar-factura --nodo FAB --numero "*99002"
+```
+
+**Esperado:**
+- **Terminal 2 (PV):**
+  - `Factura *99001: OC original 000003538 con saldo de 2 líneas (2,887,830.90)`;
+  - después, `Factura *99002: OC original 000003538 cerrada`.
+- **Terminal 3 (FAB):** las acciones `OC_CREADA` + `OC_ACTUALIZADA`, y luego `OC_CREADA` + `OC_CERRADA`.
+- **En el PV:** una OC nueva por factura, idéntica a ella (`OrdenC` = factura, `Notas1 = SYNC FAB FAC *9900x OC 000003538`). La `000003538` ya no existe.
+- **Comprometido del PV:** `SAPROD.Pedido` de los 4 productos queda igual que antes del paso 10b, porque la OC nueva sube lo mismo que baja la original.
+
+```sql
+SELECT NumeroD, OrdenC, Monto, Notas1 FROM ADM_MAY.dbo.SACOMP WHERE TipoCom = 'L' AND (Notas1 LIKE '% OC 000003538' OR NumeroD = '000003538');
+SELECT relacion, num_origen, num_destino FROM SAINT_ADM.sync.DocRef ORDER BY id;
+SELECT componente, mensaje FROM SAINT_ADM.sync.Log WHERE componente = 'F2' ORDER BY id;
+```
+
+---
+
 ## 11. Rechazo y reproceso desde el panel
 
 ### 11.1 Activar el panel
@@ -432,23 +467,31 @@ Para dejar el hub como antes, borrar el `appsettings.local.json` del hub y, si s
 
 ## Lista de verificación
 
+Corrida del 2026-10-29: todo en verde salvo el correo, que no se probó.
+
 | # | Prueba | Resultado esperado | OK |
 |---|---|---|---|
-| 1 | `dotnet test` | 63 en verde; copias sin rastro | ☐ |
-| 4 | PING / PONG | Ida y vuelta < 1 min con FAB y CEDI | ☐ |
-| 5 | F1 Fábrica `000003538` | Pedido `035850`, precio lista 3 (19.117,65), totales 10.797.277,71, salto de colisión avisado, comprometido +180 | ☐ |
-| 6 | F1 CEDI `000003465` | Pedido `000001`, cliente `9012380209`, depósito `100`, total 606.653,67 | ☐ |
-| 7 | Idempotencia | Reenviar la OC no duplica el pedido | ☐ |
-| 8 | F3 Fábrica `*33570` | OC `000003560` idéntica al centavo a la compra manual `33570` | ☐ |
-| 9 | F3 CEDI `009950` | OC `000003561` con proveedor del CEDI, 159.648 exentos y alerta del `4180` | ☐ |
-| 10 | Autoexclusión | Solo 2 `OC_PEDIDO` en el Outbox del PV | ☐ |
-| 11 | Rechazo y reproceso | RECHAZADO con alerta; tras corregir, Reprocesar crea el pedido | ☐ |
-| 12 | Latido | Alerta de caída y de recuperación; correo único (opcional) | ☐ |
-| 13 | `estado` | Diagnóstico legible por nodo | ☐ |
-| 14 | Reversión | Copias en su estado original | ☐ |
+| 1 | `dotnet test` | 63 en verde; copias sin rastro | ☑ |
+| 4 | PING / PONG | Ida y vuelta < 1 min con FAB y CEDI | ☑ ~18 s |
+| 5 | F1 Fábrica `000003538` | Pedido `035850`, precio lista 3 (19.117,65), totales 10.797.277,71, salto de colisión avisado, comprometido +180 | ☑ |
+| 6 | F1 CEDI `000003465` | Pedido `000001`, cliente `9012380209`, depósito `100`, total 606.653,67 | ☑ |
+| 7 | Idempotencia | Reenviar la OC no duplica el pedido | ☑ |
+| 8 | F3 Fábrica `*33570` | OC `000003560` idéntica al centavo a la compra manual `33570` | ☑ |
+| 9 | F3 CEDI `009950` | OC `000003561` con proveedor del CEDI, 159.648 exentos y alerta del `4180` | ☑ |
+| 10 | Autoexclusión | Solo 2 `OC_PEDIDO` en el Outbox del PV | ☑ |
+| 10b | F2 parcial + resto | OC original con saldo y luego cerrada; dos OC nuevas idénticas a las facturas; comprometido del PV neto | ☑ 2026-11-06 |
+| 11 | Rechazo y reproceso | RECHAZADO con alerta; tras corregir, Reprocesar crea el pedido | ☑ OC `000003528` → `035851` |
+| 12 | Latido | Alerta de caída y de recuperación; correo único (opcional) | ☑ sin correo |
+| 13 | `estado` | Diagnóstico legible por nodo | ☑ |
+| 14 | Reversión | Copias en su estado original | ☑ |
+
+Observaciones de la corrida del 2026-10-29:
+- En `hub.Alerta`, las alertas del hub quedaban en UTC y las de los nodos en hora local. **Corregido el 2026-10-29:** el agente envía sus alertas en UTC.
+- La alerta de recuperación mostraba la hora en que se detectó la caída. **Corregido el 2026-10-29:** ahora muestra el último latido real (`…volvió a reportar latido (el anterior fue el … UTC)`).
+- El DocRef `FACTURA_OC` aparece en Fábrica/CEDI unos 15 s después que la OC en el PV (cuando llega el ACK). Es normal.
 
 ## Lo que todavía no se puede probar aquí
 
-- **Que SAINT cargue los documentos en pantalla:** el pedido en Facturación (buscado por OC) y la OC en Compras (buscada por número de factura). Necesita el ambiente de pruebas con SAINT instalado.
-- **F2 de punta a punta:** requiere facturar en SAINT desde un pedido sincronizado. Hoy solo se prueba que esas facturas se retienen con `F2_NO_DISPONIBLE`, en la prueba automática `F3Tests.Factura_desde_pedido_sincronizado_se_retiene_como_F2`.
+- **Que SAINT cargue los documentos generados por el agente:** el pedido en Facturación (buscado por OC) y la OC en Compras (buscada por número de factura). Lo que SAINT hace con sus propios pedidos y OC ya se vio en las copias del cliente el 2026-11-05 (`notas.md`).
+- **F2 con la pantalla de SAINT:** facturar en SAINT un pedido creado por el agente. F2 ya pasó completo por el hub el 2026-11-06 (paso 10b), simulando la factura tal como la graba SAINT, y está cubierto por `SaldoOcTests` y `F3Tests.F2_…`.
 - **Cloudflare Tunnel y SMTP reales del cliente.**

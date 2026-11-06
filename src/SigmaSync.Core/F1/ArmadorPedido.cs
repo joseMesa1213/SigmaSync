@@ -14,6 +14,8 @@ public sealed record ResultadoArmado(PedidoArmado? Pedido, IReadOnlyList<ErrorDo
 /// Precio = Precio3 a 2 decimales; PriceO = Precio3; TotalItem = Precio × Cantidad;
 /// MtoTaxO = Cantidad × Precio3 × tarifa; MtoTax = MtoTaxO a la escala de su columna;
 /// encabezado: MtoTax = Σ MtoTax de los ítems a 2 decimales, MtoTotal = Monto + MtoTax.
+/// Del pedido 035850 grabado en pantalla (SAINT 9.0.2.6, 2026-11-04): Costo = CostPro, Refere = SAPROD.Refere
+/// (el código si está vacío), ExistAnt = existencia del depósito y SaldoAct = saldo del cliente.
 /// El costo de la OC no se usa: ya trae el descuento del PV.
 /// </summary>
 public static class ArmadorPedido
@@ -46,17 +48,19 @@ public static class ArmadorPedido
             items.Add(new PedidoItem(
                 NroLinea: i.Linea,
                 CodItem: p.CodProd,
+                Refere: string.IsNullOrWhiteSpace(p.Refere) ? p.CodProd : p.Refere,
                 Descrip1: p.Descrip,
                 Descrip2: p.Descrip2,
                 Descrip3: p.Descrip3,
                 Cantidad: i.Cantidad,
-                Costo: p.CostAct,
+                Costo: p.CostPro,
                 Precio: precio,
                 PriceO: R(p.Precio3, esc.PriceO),
                 TotalItem: R(precio * i.Cantidad, esc.TotalItem),
                 MtoTax: R(impuesto, esc.MtoTax),
                 MtoTaxO: R(impuesto, esc.MtoTaxO),
-                EsExento: p.Exento));
+                EsExento: p.Exento,
+                ExistAnt: p.ExistenDepo));
         }
 
         if (errores.Count > 0) return new ResultadoArmado(null, errores);
@@ -88,7 +92,8 @@ public static class ArmadorPedido
             Monto: monto,
             MtoTax: mtoTax,
             MtoTotal: monto + mtoTax,
-            Notas1: Marca(par.NodoOrigen, "OC", oc.Oc.Numero));
+            Notas1: Marca(par.NodoOrigen, "OC", oc.Oc.Numero),
+            SaldoAct: cliente.Saldo);
 
         return new ResultadoArmado(new PedidoArmado(encabezado, items), []);
     }

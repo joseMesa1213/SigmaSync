@@ -23,7 +23,7 @@ Lo central:
 | H1 | **Fábrica tiene una versión de SAINT más nueva que el PV y el CEDI.** `SAINT_ADM` tiene columnas que no existen en los otros dos nodos (`NIT`, `Status`, `Hacienda*`, `CantidadC`, `TipoTra`, `SACORRELSIS.Prefijo/Desde/Hasta`). El PV y el CEDI tienen `CantidadD` y `FechaP`, que Fábrica no tiene. El supuesto del alcance "misma versión en todos los nodos" no se cumple. | Los `INSERT` usan una lista explícita de columnas comunes. Al arrancar, el agente valida que esas columnas existan y no arranca si falta alguna. |
 | H2 | En las cuatro tablas de documento (`SAFACT`, `SAITEMFAC`, `SACOMP`, `SAITEMCOM`) **solo las llaves son obligatorias**; el resto admite `NULL` o tiene default, en los tres nodos. En el pedido `035829`, creado por SAINT en Fábrica, las columnas exclusivas de Fábrica quedan en default o `NULL`. | Las columnas que no son comunes se dejan a su default. El riesgo real son los `NULL` que SAINT no tolera (como `FechaE`): se cubre con pruebas campo a campo contra documentos creados por SAINT. |
 | H3 | `LenCorrel` es una **fila** de `SACORRELSIS` (`FieldName = 'LenCorrel'`; en Fábrica está escrita en minúscula y la intercalación no distingue mayúsculas): vale 9 en el PV y 6 en Fábrica y CEDI. | El largo del número se lee de esa fila; no se configura a mano. |
-| H4 | En el PV, `SAPROD.Pedido` y `SAEXIS.CantPed` **no cuadran** con la suma de las OC abiertas: hay 822 productos y 1.273 filas por depósito con diferencia. | Actualizar el comprometido del PV queda detrás de la bandera `ActualizarPedidoPV` (apagada por defecto) hasta confirmar en pantalla qué hace SAINT. |
+| H4 | En el PV, `SAPROD.Pedido` y `SAEXIS.CantPed` **no cuadran** con la suma de las OC abiertas: hay 822 productos y 1.273 filas por depósito con diferencia. | La prueba P2 (2026-11-05) confirmó en pantalla que SAINT sube `SAPROD.Pedido` y `SAEXIS.CantPed` al grabar la OC y los baja al recibirla o borrarla. El agente hace lo mismo: la bandera `ActualizarPedidoPV` queda encendida. Si falta la fila de `SAEXIS` del depósito (producto no asignado al depósito), solo sube `SAPROD.Pedido`, como hizo SAINT con la OC 3567. El descuadre que ya existía es anterior y no se corrige. |
 | H5 | `PrxOrdenC` del PV (3560) coincide con la última OC (`000003559`) + 1. `PrxNotaEn` también vale 3560, pero las notas de entrega llegan a `000003790`. | `PrxOrdenC` es el consecutivo correcto para las OC. `PrxNotaEn` no se toca. |
 | H6 | Largos de columna: `CodUsua`/`CodEsta` admiten 10 caracteres, `Notas1` 60, `OrdenC` 30 y `NumeroD` 20. | La marca de sincronización y el usuario `SYNC` caben. |
 | H7 | Los usuarios de SAINT están en `SSUSRS` con datos cifrados. El usuario `WORKER` de la integración anterior **no existía** en `SSUSRS`. | El agente puede grabar con `CodUsua = 'SYNC'` aunque el usuario no exista. Se pedirá al cliente crearlo desde SAINT para que quede trazable en la aplicación. |
@@ -140,7 +140,7 @@ pull → por cada mensaje:
 | `CodUsua` / `CodEsta` | `SYNC` / `SYNC` | `SYNC` / `SYNC` | `SYNC` / `SYNC` |
 | `CodUbic` | `115` | `005` | por confirmar |
 | `CodVend` | — | `1305` | por confirmar |
-| `ActualizarPedidoPV` | `0` | — | — |
+| `ActualizarPedidoPV` | `1` | — | — |
 | `CapturaDesde` | fecha de activación | fecha de activación | fecha de activación |
 | `VentanaDias` / `EsperaSegundos` | 3 / 60 | 3 / 60 | 3 / 60 |
 
@@ -367,24 +367,26 @@ SET @num = RIGHT(REPLICATE('0', @len) + CAST(@n - 1 AS varchar(10)), @len);
 | D2 | Autoexclusión | Las OC con `CodUsua = 'SYNC'` o con `DocRef` de creación no se capturan como F1 | Decidido |
 | D3 | Esquemas distintos | Columnas comunes explícitas, validación de esquema al arrancar y prueba de oro por nodo | Decidido |
 | D4 | Consecutivos | `UPDATE` atómico dentro de la transacción del documento, con salvaguarda de colisión y alerta | Decidido |
-| D5 | **Facturación parcial F2** | **Dividir la OC.** Si la factura cubre toda la OC, se ajusta en sitio. Si cubre una parte, la OC original queda idéntica a lo facturado (`OrdenC` = factura) y el saldo pasa a una **OC nueva** (`PrxOrdenC`, `Notas1 = SYNC SALDO <OC original>`), con `DocRef OC_SALDO`. El `DocRef OC_PEDIDO` se re-apunta a la OC de saldo para las facturas siguientes del mismo pedido | **Requiere aprobación de Carlos** |
-| D6 | Excesos y productos nuevos en F2 | Si se factura más de lo pedido, la OC se ajusta a lo facturado y queda una alerta. Un producto no pedido se agrega como línea nueva, también con alerta | Decidido (aplica la regla "la OC debe ser idéntica a la factura") |
-| D7 | OC ya cargada en compra antes de la factura | Si la OC enlazada ya no existe o SAINT la marcó como procesada, se trata como F3 (OC nueva) con alerta | Depende de la prueba P1 |
-| D8 | Comprometido del PV | Bandera `ActualizarPedidoPV`, apagada hasta la prueba P2 (H4) | Decidido |
+| D5 | **Facturación F2 (completa o parcial)** | **Una OC por factura; la OC original queda como saldo.** Cada factura de un pedido sincronizado crea en el PV una **OC nueva idéntica a la factura**, igual que F3 (`OrdenC` = factura, `Notas1 = SYNC <nodo> FAC <factura> OC <original>`). A la **OC original** se le resta lo facturado, como hace SAINT cuando el PV recibe una OC en partes (P1b): la línea cumplida se borra, la parcial queda con el saldo y, si no queda nada, se borra la OC. A diferencia de SAINT, se recalculan `TotalItem` y los totales. El comprometido sube en la nueva y baja en la original, así que queda neto hasta la compra. El `DocRef OC_PEDIDO` no se toca. ACK: `OC_CREADA` (nueva) + `OC_ACTUALIZADA` u `OC_CERRADA` (original) | Decidido (2026-11-06; Carlos delegó el diseño) |
+| D6 | Excesos y productos nuevos en F2 | La OC nueva lleva lo facturado. Si se factura más de lo pendiente, la original baja solo lo pendiente y queda la alerta `CANTIDAD_EXCEDIDA`. Un producto que no estaba en la OC original va solo en la nueva, con la alerta `PRODUCTO_NO_PEDIDO` | Decidido |
+| D7 | OC original que ya no existe al llegar la factura | El PV ya la cargó en una compra o la borró. Se crea igual la OC nueva, con la alerta `OC_NO_ENCONTRADA`, para que revisen que la mercancía no se reciba dos veces | Decidido (P1: SAINT borra la OC al cargarla completa) |
+| D8 | Comprometido del PV | Bandera `ActualizarPedidoPV`, encendida desde la prueba P2 del 2026-11-05 (H4). Con `0` se apaga | Decidido |
 | D9 | Usuario y estación | `SYNC` / `SYNC`; se pide al cliente crear el usuario en SAINT (H7) | Decidido |
 | D10 | Ubicación del hub | Servidor de Fábrica, que también aloja `BODEGA1` | Propuesto (confirmar disponibilidad 24/7) |
 | D11 | Latencia | Menos de 2 minutos de punta a punta | Propuesto (confirmar con el cliente) |
 | D12 | Plataforma | **.NET 10 (LTS hasta noviembre de 2028)** en lugar de .NET 8, que sale de soporte el 10 de noviembre de 2026. Se publica autocontenido (win-x64, un solo ejecutable), así que los servidores no necesitan .NET instalado | Decidido |
-| D14 | Facturas de pedidos sincronizados mientras F2 no esté habilitado | El PV detecta F2 (ítem con `oc_origen`, o `pedido_origen` con relación `OC_PEDIDO` en su `DocRef`) **antes** de validar o escribir nada. Rechaza la factura con `F2_NO_DISPONIBLE`: queda `RECHAZADO` en el hub y se reprocesa con `/v1/admin/mensajes/{id}/reprocesar` cuando F2 exista. Una factura de un pedido hecho a mano en Fábrica (sin relación) sigue por F3 | Decidido |
-| D15 | Comprometido del PV en F3 | La OC se crea sin tocar `SAPROD.Pedido` ni `SAEXIS.CantPed` (`ActualizarPedidoPV = 0`) hasta la prueba P2 | Decidido |
+| D14 | Detección de F2 | El PV detecta F2 por ítem: `oc_origen`, o `pedido_origen` con relación `OC_PEDIDO` en su `DocRef`. Un ítem de un pedido hecho a mano en Fábrica (sin relación) va solo en la OC nueva (F3). Hasta el 2026-11-06 estas facturas se rechazaban con `F2_NO_DISPONIBLE`; las que quedaron `RECHAZADO` en el hub se reprocesan con `/v1/admin/mensajes/{id}/reprocesar` | Decidido (F2 habilitado el 2026-11-06) |
+| D15 | Comprometido del PV en F3 | La OC suma `SAPROD.Pedido` y `SAEXIS.CantPed` del depósito, igual que SAINT (prueba P2). Sin fila en `SAEXIS`, no la crea (igual que SAINT con la OC 3567 y con el pedido 035852) | Decidido |
 | D13 | Diagnóstico | Mensajes `PING`/`PONG` entre nodos: prueban de punta a punta hub, credenciales y esquema sin tocar SAINT | Decidido |
 
 ### Ejemplo D5: OC `000003538` (100 und A, 50 und B) → pedido `035850`
 
-| Evento | OC `000003538` | OC de saldo |
+| Evento | OC original `000003538` | OC nueva (la que se carga en Compras) |
 |---|---|---|
-| Factura 1: 100 A | A 100 (idéntica a la factura 1, lista para cargar) | `000003561`: B 50 |
-| Factura 2: 50 B | — | `000003561` se ajusta en sitio: B 50 (idéntica a la factura 2) |
+| Factura 1: 100 A | Queda **B 50** (saldo pendiente) | `000003570`: A 100, idéntica a la factura 1 (`OrdenC` = factura 1) |
+| Factura 2: 50 B | **Se borra** (quedó en cero) | `000003571`: B 50, idéntica a la factura 2 |
+
+El operador del PV siempre carga la OC buscándola por el número de factura, igual que en F3. Mientras tanto, la OC original le muestra lo que falta por llegar, con su mismo número. Probado en `F3Tests.F2_dos_facturas_parciales_…` y `SaldoOcTests`.
 
 ## 11. Dependencias del cliente y análisis de bloqueo
 
@@ -397,7 +399,7 @@ Pruebas en pantalla que solo puede hacer alguien con SAINT instalado:
 |---|---|---|
 | Colisión de `PrxPedido` en Fábrica + desinstalación confirmada de `WORKER` | Salida a producción de F1 en Fábrica | Desarrollo y pruebas (la salvaguarda de 9.1 la maneja) |
 | Ambiente de pruebas con SAINT instalado (P1, P2, P3) | Cierre de F2 (P1), comprometido del PV (P2), validación de F1 en el CEDI (P3) y la UAT | Infraestructura, F1 en Fábrica, F3 |
-| Aprobación de D5 (facturación parcial) | Desarrollo de F2 | Todo lo anterior a la fase 4 |
+| ~~Aprobación de D5 (facturación parcial)~~ Resuelta el 2026-11-06: Carlos delegó el diseño | — | — |
 | Condición operativa: Fábrica y CEDI facturan cargando el pedido | Que F2 se use en producción | Desarrollo de F2 (sin ella, todo cae en F3) |
 | Usuario `SYNC` creado en cada base | Nada técnico (H7) | — |
 | Número real de PV y códigos de cliente/proveedor de cada uno | Despliegue al resto de PV | Piloto con PV Mayorista |
@@ -409,7 +411,7 @@ Pruebas en pantalla que solo puede hacer alguien con SAINT instalado:
 
 | Nivel | Qué se prueba | Casos de oro |
 |---|---|---|
-| Unitarias (`Core`) | Costo neto, `TotalItem`, `TGravable`/`TExento`, redondeo de `Precio3` (`Precio` vs `PriceO`), IVA del pedido, división de OC (D5) | `*33570` (costo 18.161,7675), `009950` (ítem exento `4180`), pedido `035829`, pedido `035828` con facturas `*31819`/`*31820` |
+| Unitarias (`Core`) | Costo neto, `TotalItem`, `TGravable`/`TExento`, redondeo de `Precio3` (`Precio` vs `PriceO`), IVA del pedido, saldo de la OC original (D5) | `*33570` (costo 18.161,7675), `009950` (ítem exento `4180`), pedido `035829`, pedido `035828` con facturas `*31819`/`*31820` |
 | Integración (LocalDB) | Escritura real con rollback o restauración a línea base: una fila por encabezado, consecutivos, `Compro`/`CantCom`, idempotencia por `msg_id` y por documento, autoexclusión de las OC de F3, concurrencia de consecutivos (dos consumidores y un `UPDATE` simulado de SAINT) | OC `000003538` → pedido comparado campo a campo con `035829` |
 | Punta a punta local | Hub + 3 agentes contra LocalDB: OC → pedido → `ACK_PEDIDO` → `DocRef` en el PV; factura → OC (F3, F2, mixta) | Escenarios D5 completo y parcial |
 | Pantalla (ambiente del cliente) | El pedido carga en Facturación por número de OC; la OC carga en Compras → Cargar con totales iguales a la factura | P1, P2, P3 |
@@ -421,7 +423,7 @@ Pruebas en pantalla que solo puede hacer alguien con SAINT instalado:
 | Diseño técnico (este documento) | 16 – 24 | Diseño aprobado, DDL v1, contrato v1.1 | Revisión de Carlos |
 | 2. Infraestructura | 40 – 60 | Esquema `sync`, hub, agente con `PING` de punta a punta en local. **Hecho el 2026-10-28**; falta probar cloudflared en el servidor del cliente | — |
 | 3. F1 OC → pedido | 40 – 56 | F1 probado en LocalDB (Fábrica y CEDI). **Hecho el 2026-10-28**: el pedido generado tiene las mismas columnas llenas que `035829`, y la prueba de punta a punta con datos reales pasó. Falta la validación en pantalla (P3 y facturar desde el pedido) | P3 para cerrar el CEDI |
-| 4. F3 y F2 | 56 – 80 | F3 primero; F2 después de D5 y P1. **F3 hecho el 2026-10-28**: la OC generada tiene las mismas columnas que una OC grabada en SAINT y cuadra al centavo con la compra 33570 que el PV digitó a mano. **De F2 está hecha la detección** (D14); falta ajustar la OC | D5, P1, P2 |
+| 4. F3 y F2 | 56 – 80 | F3 primero; F2 después de D5 y P1. **F3 hecho el 2026-10-28**: la OC generada tiene las mismas columnas que una OC grabada en SAINT y cuadra al centavo con la compra 33570 que el PV digitó a mano. **F2 hecho el 2026-11-06** con la regla D5 (una OC por factura y la original queda como saldo), después de verlo en pantalla el 2026-11-05: facturas completa y parcial desde pedido en Fábrica (`*33647`, `*33648`), y P1 y P2 en el PV | — |
 | 5. Operación | 24 – 36 | Consulta de DLQ, reproceso, alertas, manual. **Hecho el 2026-10-28**: alertas centralizadas en `hub.Alerta` (DLQ y latido desde el hub; advertencias de negocio desde el `sync.Log` de cada nodo con el latido), correo de resumen por SMTP, panel `/panel`, descarte de mensajes, comandos `estado` y `reintentar-outbox`, purga en los nodos y [manual de operación](manual-operacion.md). Falta probar el SMTP real del cliente | — |
 | 6. Pruebas y UAT | 32 – 48 | Acta de UAT con piloto Mayorista + Fábrica + CEDI | Ambiente de pruebas, colisión resuelta |
 | Despliegue ~6 PV | 18 – 24 | Agentes instalados y `NodoTercero` sembrado | Número real de PV |

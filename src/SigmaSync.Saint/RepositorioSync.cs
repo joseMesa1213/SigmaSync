@@ -160,10 +160,14 @@ public sealed class RepositorioSync(string connectionString)
     public static Task<long> MaxLogIdAsync(SqlConnection cn) =>
         cn.ExecuteScalarAsync<long>("SELECT ISNULL(MAX(id), 0) FROM sync.Log");
 
-    /// <summary>Advertencias y errores de sync.Log posteriores a <paramref name="desdeId"/>, para enviarlos con el latido.</summary>
+    /// <summary>
+    /// Advertencias y errores de sync.Log posteriores a <paramref name="desdeId"/>, para enviarlos con el latido.
+    /// sync.Log guarda la hora local del servidor; Ts sale en UTC, como todas las horas del hub.
+    /// </summary>
     public static async Task<IReadOnlyList<AlertaNodo>> AlertasDesdeAsync(SqlConnection cn, long desdeId, int max) =>
         (await cn.QueryAsync<AlertaNodo>("""
-            SELECT TOP (@max) id AS LogId, CAST(ts AS datetime) AS Ts, nivel, componente, msg_id AS MsgId, mensaje
+            SELECT TOP (@max) id AS LogId, CAST(DATEADD(MINUTE, DATEDIFF(MINUTE, SYSDATETIME(), SYSUTCDATETIME()), ts) AS datetime) AS Ts,
+                   nivel, componente, msg_id AS MsgId, mensaje
             FROM sync.Log WHERE id > @desdeId AND nivel IN ('WARN', 'ERROR')
             ORDER BY id
             """, new { desdeId, max })).AsList();

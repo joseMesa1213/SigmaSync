@@ -8,19 +8,25 @@ public sealed record ClienteDestino(
     string? Direc1,
     string? Direc2,
     string? Telef,
-    int DiasCred);
+    int DiasCred,
+    decimal Saldo = 0);
 
-/// <summary>Producto en la base destino (SAPROD + tarifa de impuestos de venta de SATAXPRD, sin retenciones).</summary>
+/// <summary>
+/// Producto en la base destino (SAPROD + tarifa de impuestos de venta de SATAXPRD, sin retenciones,
+/// + existencia en el depósito de despacho).
+/// </summary>
 public sealed record ProductoDestino(
     string CodProd,
     string Descrip,
     string? Descrip2,
     string? Descrip3,
     decimal Precio3,
-    decimal CostAct,
+    decimal CostPro,
     bool EsExento,
     decimal TarifaImpuesto,
-    bool Activo)
+    bool Activo,
+    string? Refere = null,
+    decimal ExistenDepo = 0)
 {
     /// <summary>Sin tarifa de impuesto el ítem va exento aunque el maestro no lo marque.</summary>
     public bool Exento => EsExento || TarifaImpuesto == 0;
@@ -67,11 +73,13 @@ public sealed record PedidoEncabezado(
     decimal Monto,
     decimal MtoTax,
     decimal MtoTotal,
-    string Notas1);
+    string Notas1,
+    decimal SaldoAct);
 
 public sealed record PedidoItem(
     int NroLinea,
     string CodItem,
+    string Refere,
     string Descrip1,
     string? Descrip2,
     string? Descrip3,
@@ -82,6 +90,7 @@ public sealed record PedidoItem(
     decimal TotalItem,
     decimal MtoTax,
     decimal MtoTaxO,
-    bool EsExento);
+    bool EsExento,
+    decimal ExistAnt);
 
 public sealed record PedidoArmado(PedidoEncabezado Encabezado, IReadOnlyList<PedidoItem> Items);
